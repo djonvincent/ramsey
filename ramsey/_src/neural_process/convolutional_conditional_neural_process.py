@@ -1,5 +1,6 @@
 from typing import Optional, Tuple
 from flax import linen as nn
+from jax import Array
 from jax import numpy as jnp
 
 from ramsey._src.family import Family, Gaussian
@@ -34,13 +35,13 @@ class CCNP(NP):
             x = jnp.expand_dims(x, 0)
         grid_axes = jnp.meshgrid(*[jnp.linspace(0, 1, self.density)]*x.shape[-1])
         unit_grid = jnp.column_stack([ax.flatten() for ax in grid_axes])
-        uniform_grid = jnp.expand_dims(unit_grid,0) * \
+        uniform_grid = jnp.expand_dims(unit_grid, 0) * \
                        jnp.expand_dims(x.max(axis=-2) - x.min(axis=-2), 1) + \
-                       x.min(axis=-2)
+                       jnp.expand_dims(x.min(axis=-2), 1)
         K = self.deterministic_encoder(uniform_grid, x_context)
         h0 = jnp.expand_dims(K.sum(axis=-1), -1)
-        h1 = K @ y_target
-        h1 = h1 / h0 + 1e-8)
+        h1 = K @ y_context
+        h1 = h1 / (h0 + 1e-8)
         h = jnp.concatenate((h0, h1), axis=-1)
         h = h.reshape(-1, *(self.density for i in range(x.shape[-1])), 2)
         return uniform_grid, h
@@ -52,8 +53,10 @@ class CCNP(NP):
     def _decode(self, representation: Array, x_target: Array, y: Array):
         uniform_grid, h = representation
         f = self._decoder_cnn(h)
-        K = self._decoder_kernel(uniform_grid, x_context)
-        target = jnp.concatenate([representation, x_target], axis=-1)
-        family = self._family(target)
+        K = self._decoder_kernel(x_target, uniform_grid)
+        f0, f1 = jnp.split(f, 2, axis=-1)
+        mu = K @ f0.reshape(f0.shape[0], -1, f0.shape[-1])
+        sigma = K @ nn.softplus(f1).reshape(f1.shape[0], -1, f1.shape[-1])
+        family = self._family(jnp.concatenate((mu, sigma), axis=-1))
         self._check_posterior_predictive_axis(family, x_target, y)
         return family
