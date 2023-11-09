@@ -142,9 +142,9 @@ def exponentiated_quadratic(
     """
 
     def _exponentiated_quadratic(x, y, sigma, rho):
-        x_e = jnp.expand_dims(x, 1) / rho
-        y_e = jnp.expand_dims(y, 0) / rho
-        d = jnp.sum(jnp.square(x_e - y_e), axis=2)
+        x_e = jnp.expand_dims(x, -2) / rho
+        y_e = jnp.expand_dims(y, -3) / rho
+        d = jnp.sum(jnp.square(x_e - y_e), axis=-1)
         K = sigma * jnp.exp(-0.5 * d)
         return K
 
