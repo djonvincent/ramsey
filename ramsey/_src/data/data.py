@@ -7,7 +7,7 @@ from numpyro import distributions as dist
 
 from ramsey._src.data.dataset_m4 import M4Dataset
 from ramsey._src.experimental.gaussian_process.kernel.stationary import (
-    exponentiated_quadratic,
+    exponentiated_quadratic, matern_5_2, periodic
 )
 
 
@@ -100,7 +100,7 @@ def sample_from_sine_function(rng_key, batch_size=10, num_observations=100):
 
 # pylint: disable=too-many-locals,invalid-name
 def sample_from_gaussian_process(
-    rng_key, batch_size=10, num_observations=100, rho=None, sigma=None
+    rng_key, batch_size=10, num_observations=100, rho=None, sigma=None, xmin=-2, xmax=2
 ):
     r"""Sample from a Gaussian process.
 
@@ -134,7 +134,7 @@ def sample_from_gaussian_process(
         a tuple consisting of outputs (y), inputs (x) and latent GP
         realization (f) where
     """
-    x = jnp.linspace(-jnp.pi, jnp.pi, num_observations).reshape(
+    x = jnp.linspace(xmin, xmax, num_observations).reshape(
         (num_observations, 1)
     )
     ys = []

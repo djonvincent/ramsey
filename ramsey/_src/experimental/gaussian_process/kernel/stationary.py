@@ -176,11 +176,48 @@ def periodic(x1: Array, x2: Array, period, sigma, rho):
     """
 
     def _periodic(x, y, period, sigma, rho):
-        x_e = jnp.expand_dims(x, 1)
-        y_e = jnp.expand_dims(y, 0)
-        r2 = jnp.sum((x_e - y_e) ** 2, axis=2)
+        x_e = jnp.expand_dims(x, -2)
+        y_e = jnp.expand_dims(y, -3)
+        r2 = jnp.sum((x_e - y_e) ** 2, axis=-1)
         r = jnp.sqrt(r2)
         K = sigma * jnp.exp(-2 / rho**2 * jnp.sin(jnp.pi * r / period) ** 2)
         return K
 
     return _periodic(x1, x2, period, sigma, rho)
+
+# pylint: disable=invalid-name
+def matern_5_2(
+    x1: Array,
+    x2: Array,
+    sigma: float,
+    rho: Union[float, jnp.ndarray],
+):
+    """Matern-5/2 convariance function.
+
+    Parameters
+    ----------
+    x1: jax.Array
+        (`n x p`)-dimensional set of data points
+    x2: jax.Array
+        (`m x p`)-dimensional set of data points
+    sigma: float
+        the standard deviation of the kernel function
+    rho: Union[float, np.ndarray]
+        the lengthscale of the kernel function. Can be a float or a
+        :math:`p`-dimensional vector if ARD-behaviour is desired
+
+    Returns
+    -------
+    jax.Array
+        returns a (`n x m`)-dimensional kernel matrix
+    """
+
+    def _matern(x, y, sigma, rho):
+        x_e = jnp.expand_dims(x, -2) / rho
+        y_e = jnp.expand_dims(y, -3) / rho
+        d = 5 * jnp.sum(jnp.square(x_e - y_e), axis=-1)
+        sqr_d = jnp.sqrt(d)
+        K = sigma * (1 + sqr_d + d / 3) * jnp.exp(-sqr_d)
+        return K
+
+    return _matern(x1, x2, sigma, rho)
