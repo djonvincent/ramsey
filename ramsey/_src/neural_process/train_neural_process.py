@@ -1,4 +1,6 @@
+from typing import Iterable, Tuple, Union
 import jax
+import jax.numpy as jnp
 import numpy as np
 import optax
 from flax.training.train_state import TrainState
@@ -6,9 +8,11 @@ from jax import Array
 from jax import random as jr
 from tqdm import tqdm
 
-from ramsey._src.neural_process.neural_process import NP
+from ramsey._src.experimental.gaussian_process.kernel.stationary import matern_5_2
+from ramsey._src.neural_process.neural_process import NP, MaskedNP
+from ramsey._src.neural_process.convolutional_conditional_neural_process import CCNP
 
-__all__ = ["train_neural_process"]
+__all__ = ["train_neural_process", "train_masked_np"]
 
 
 @jax.jit
@@ -89,7 +93,7 @@ def train_neural_process(
         x_target=x,
     )
 
-    objectives = np.zeros(n_iter)
+    objectives = []
     for i in tqdm(range(n_iter)):
         split_rng_key, sample_rng_key, rng_key = jr.split(rng_key, 3)
         batch = _split_data(
@@ -101,13 +105,113 @@ def train_neural_process(
             batch_size=batch_size,
         )
         state, obj = _step({"sample": sample_rng_key}, state, **batch)
-        objectives[i] = obj
+        objectives.append(obj)
         if (i % 100 == 0 or i == n_iter - 1) and verbose:
             elbo = -float(obj)
             print(f"ELBO at itr {i}: {elbo:.2f}")
 
-    return state.params, objectives
+    return state.params, np.array(objectives)
 
+def train_masked_np(
+    rng_key: jr.PRNGKey,
+    neural_process: MaskedNP,  # pylint: disable=invalid-name
+    data_func,
+    batch_size: int,
+    shuffle = False,
+    optimizer=optax.adam(3e-4),
+    n_iter=200,
+    n_epochs=256,
+    n_context_max: int = 50,
+    n_context_min: int = 3,
+    n_target_max: int = 50,
+    n_target_min: int = 3,
+    verbose=False,
+    split_fn = None
+):
+
+    train_state_rng, rng_key = jr.split(rng_key)
+    init_kwargs = {
+        "x_context": jnp.empty((batch_size, n_context_max, 1)),
+        "y_context": jnp.empty((batch_size, n_context_max, 1)),
+        "x_target": jnp.empty((batch_size, n_target_max, 1)),
+        "context_mask": jnp.empty((batch_size, n_context_max), dtype=int),
+        "target_mask": jnp.empty((batch_size, n_target_max), dtype=int)
+    }
+
+    state = _create_train_state(
+        train_state_rng,
+        neural_process,
+        optimizer,
+        **init_kwargs
+    )
+
+    def get_context_target_ranges(rng_key):
+        ctx_rng_key, tgt_rng_key = jr.split(rng_key, 2)
+        steps = 2
+        context_step = jr.randint(ctx_rng_key, minval=0, maxval=steps, shape=()).item()
+        target_step = jr.randint(tgt_rng_key, minval=0, maxval=steps, shape=()).item()
+        return {
+            "n_context_min": n_context_min + context_step*((n_context_max-n_context_min)//steps),
+            "n_context_max": n_context_min + (context_step+1)*((n_context_max-n_context_min)//steps),
+            "n_target_min": n_target_min + target_step*((n_target_max-n_target_min)//steps),
+            "n_target_max": n_target_min + (target_step+1)*((n_target_max-n_target_min)//steps)
+        }
+
+    def split_data(rng_key, x, y, n_context_min, n_context_max, n_target_min, n_target_max):
+        context_rng_key, target_rng_key, perm_rng_key = jr.split(rng_key, 3)
+        n_context = jr.randint(context_rng_key, (1,), n_context_min, n_context_max + 1)
+        n_target = jr.randint(target_rng_key, (1,), n_target_min, n_target_max + 1)
+
+        if shuffle:
+            idxs = jr.permutation(
+                perm_rng_key,
+                jnp.repeat(jnp.arange(x.shape[1])[jnp.newaxis, :], batch_size, axis=0),
+                axis=1,
+                independent=True
+            )
+        else:
+            idxs = jnp.repeat(jnp.arange(x.shape[1])[jnp.newaxis, :], batch_size, axis=0)
+
+        tiled_arange = jnp.repeat(jnp.arange(n_context_max)[jnp.newaxis, :], batch_size, axis=0)
+        context_mask = (tiled_arange < n_context[:, jnp.newaxis]).astype(int)
+        tiled_arange = jnp.repeat(jnp.arange(n_target_max)[jnp.newaxis, :], batch_size, axis=0)
+        target_mask = (tiled_arange < n_target[:, jnp.newaxis]).astype(int)
+
+        x_samples = jnp.take_along_axis(x, idxs[..., jnp.newaxis], axis=1)
+        y_samples = jnp.take_along_axis(y, idxs[..., jnp.newaxis], axis=1)
+        x_context = x_samples[:, :n_context_max, :]
+        x_target = x_samples[:, n_context_max:(n_context_max+n_target_max), :]
+        y_context = y_samples[:, :n_context_max, :]
+        y_target = y_samples[:, n_context_max:(n_context_max+n_target_max), :]
+        return {
+            "x_context": x_context,
+            "y_context": y_context,
+            "context_mask": context_mask,
+            "x_target": x_target,
+            "y_target": y_target,
+            "target_mask": target_mask
+        }
+
+    if split_fn is None:
+        _split_data = jax.jit(split_data, static_argnums=[3,4,5,6])
+    else:
+        _split_data = jax.jit(split_fn, static_argnums=[3, 4, 5, 6])
+    _data_func = jax.jit(data_func, static_argnums=[1,2])
+    objectives = []
+    for i in tqdm(range(n_epochs)):
+        for j in range(n_iter):
+            sample_rng_key, rng_key = jr.split(rng_key, 2)
+            x, y = _data_func(sample_rng_key, batch_size, n_context_max+n_target_max)
+            range_key, split_rng_key, sample_rng_key, rng_key = jr.split(rng_key, 4)
+            ranges = get_context_target_ranges(range_key)
+            batch = _split_data(split_rng_key, x, y, **ranges)
+            state, obj = _step({}, state, **batch)
+            objectives.append(obj)
+            if (i % 100 == 0 or i == n_iter - 1) and verbose:
+                elbo = -float(obj)
+                print(f"ELBO at itr {i}: {elbo:.2f}")
+
+    return state.params, np.array(objectives)
 
 # pylint: disable=too-many-locals
 def _split_data(
