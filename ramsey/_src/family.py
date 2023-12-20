@@ -38,7 +38,7 @@ class Gaussian(Family):
             scale = jnp.exp(log_scale)
         else:
             mean, log_scale = jnp.split(target, 2, axis=-1)
-            scale = 0.1 + 0.9 * jax.nn.softplus(log_scale)
+            scale = 0.1*0.1 + 0.9 * jax.nn.softplus(log_scale)
         return dist.Normal(loc=mean, scale=scale)
 
     def get_canonical_parameters(self):
