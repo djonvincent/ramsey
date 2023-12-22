@@ -200,12 +200,11 @@ def train_masked_np(
     objectives = []
     for i in tqdm(range(n_epochs)):
         for j in range(n_iter):
-            sample_rng_key, rng_key = jr.split(rng_key, 2)
-            x, y = _data_func(sample_rng_key, batch_size, n_context_max+n_target_max)
-            range_key, split_rng_key, sample_rng_key, rng_key = jr.split(rng_key, 4)
-            ranges = get_context_target_ranges(range_key)
+            data_rng_key, range_rng_key, split_rng_key, sample_rng_key, rng_key = jr.split(rng_key, 5)
+            x, y = _data_func(data_rng_key, batch_size, n_context_max+n_target_max)
+            ranges = get_context_target_ranges(range_rng_key)
             batch = _split_data(split_rng_key, x, y, **ranges)
-            state, obj = _step({}, state, **batch)
+            state, obj = _step({"sample": sample_rng_key}, state, **batch)
             objectives.append(obj)
             if (i % 100 == 0 or i == n_iter - 1) and verbose:
                 elbo = -float(obj)

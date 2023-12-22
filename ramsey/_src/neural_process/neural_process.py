@@ -310,7 +310,7 @@ class MaskedNP(nn.Module):
         assert_rank([x_context, y_context, x_target], 3)
         if y_target is not None:
             assert_rank(y_target, 3)
-            return self._negative_elbo(x_context, y_context, x_target, y_target, context_mask, target_mask, **kwargs)
+            return self._negative_elbo(x_context, y_context, x_target, y_target, context_mask, target_mask)
 
         _, num_observations, _ = x_target.shape
 
@@ -326,17 +326,17 @@ class MaskedNP(nn.Module):
 
         if self.latent_encoder is not None:
             rng = self.make_rng("sample")
-            z_latent = self._encode_latent(x_context, y_context, context_mask, **kwargs).sample(rng)
+            z_latent = self._encode_latent(x_context, y_context, context_mask).sample(rng)
         else:
             z_latent = None
 
         z_deterministic = self._encode_deterministic(
-            x_context, y_context, x_target, context_mask, target_mask, **kwargs
+            x_context, y_context, x_target, context_mask, target_mask
         )
         representation = self._concat_and_tile(
             z_deterministic, z_latent, num_observations
         )
-        pred_fn = self._decode(representation, x_target, y_context, **kwargs)
+        pred_fn = self._decode(representation, x_target, y_context)
 
         return pred_fn
 
@@ -364,8 +364,13 @@ class MaskedNP(nn.Module):
 
         if self.latent_encoder is not None:
             rng = self.make_rng("sample")
-            prior = self._encode_latent(x_context, y_context, context_mask, **kwargs)
-            posterior = self._encode_latent(x_target, y_target, context_mask, **kwargs)
+            prior = self._encode_latent(x_context, y_context, context_mask)
+            #posterior = self._encode_latent(x_target, y_target, target_mask)
+            posterior = self._encode_latent(
+                jnp.concatenate((x_target, x_context), axis=1),
+                jnp.concatenate((y_target, y_context), axis=1),
+                jnp.concatenate((target_mask, context_mask), axis=1),
+            )
             z_latent = posterior.sample(rng)
             kl = jnp.sum(kl_divergence(posterior, prior), axis=-1)
         else:
@@ -373,12 +378,12 @@ class MaskedNP(nn.Module):
             kl = 0
 
         z_deterministic = self._encode_deterministic(
-            x_context, y_context, x_target, context_mask, target_mask, **kwargs
+            x_context, y_context, x_target, context_mask, target_mask
         )
         representation = self._concat_and_tile(
             z_deterministic, z_latent, num_observations
         )
-        pred_fn = self._decode(representation, x_target, y_target, **kwargs)
+        pred_fn = self._decode(representation, x_target, y_target)
         loglik = jnp.sum(pred_fn.log_prob(y_target) * target_mask[..., jnp.newaxis], axis=1)
         elbo = jnp.mean(loglik - kl)
 
@@ -422,15 +427,16 @@ class MaskedNP(nn.Module):
             context_mask: Array
     ):
         xy_context = jnp.concatenate([x_context, y_context], axis=-1)
-        z_latent = self._latent_encoder(xy_context) * context_mask[..., jnp.newaxis]
-        return self._encode_latent_gaussian(z_latent)
+        z_latent = self._latent_encoder(xy_context)
+        return self._encode_latent_gaussian(z_latent, context_mask)
 
     # pylint: disable=duplicate-code
-    def _encode_latent_gaussian(self, z_latent):
-        z_latent = jnp.mean(z_latent, axis=1, keepdims=True)
+    def _encode_latent_gaussian(self, z_latent, context_mask):
+        z_latent = jnp.sum(z_latent * context_mask[..., jnp.newaxis], axis=1, keepdims=True)
+        z_latent = z_latent / jnp.sum(context_mask[..., jnp.newaxis], axis=1, keepdims=True)
         z_latent = self._latent_variable_encoder(z_latent)
         mean, sigma = jnp.split(z_latent, 2, axis=-1)
-        sigma = 0.1 + 0.9 * jax.nn.sigmoid(sigma)
+        sigma = 0.01 + 0.9 * jax.nn.sigmoid(sigma)
         return dist.Normal(loc=mean, scale=sigma)
 
     def _decode(self, representation: Array, x_target: Array, y: Array):

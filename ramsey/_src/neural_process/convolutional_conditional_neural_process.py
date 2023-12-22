@@ -14,9 +14,10 @@ class CCNP(MaskedNP):
     decoder: Tuple[nn.Module, Kernel, Kernel]
     deterministic_encoder: Kernel
     family: Family = Gaussian()
-    grid_shape: Tuple[int, ...] = None
-    uniform_grid: Array = None
-    density: int = 10
+    #grid_shape: Tuple[int, ...] = None
+    #uniform_grid: Array = None
+    grid_size: Tuple[float] = None
+    density: int = None
 
     def setup(self):
         """Construct the networks of the class."""
@@ -26,23 +27,44 @@ class CCNP(MaskedNP):
             self.decoder[1],
             self.decoder[2],
         )
+        if self.latent_encoder is not None:
+            [self._latent_encoder, self._latent_variable_encoder] = (
+                self.latent_encoder[0],
+                self.latent_encoder[1],
+            )
         self._deterministic_encoder = self.deterministic_encoder
         self._family = self.family
-
+        self.uniform_grid, self.grid_shape = self.construct_grid(self.grid_size, self.density)
 
     @staticmethod
     # pylint: disable=duplicate-code
     def _concat_and_tile(z_deterministic, z_latent, num_observations):
-        return z_deterministic
+        if z_latent is None:
+            return z_deterministic
+        uniform_grid, h = z_deterministic
+        z_latent = jnp.expand_dims(z_latent, tuple(range(1, h.ndim - 2)))
+        z_latent = jnp.broadcast_to(z_latent, (*h.shape[:-1], z_latent.shape[-1]))
+        h = jnp.concatenate((h, z_latent), axis=-1)
+        return uniform_grid, h
 
     @staticmethod
-    def construct_grid(x, density):
-        x_range = jnp.stack((x.min(axis=(0,1)), x.max(axis=(0,1))), axis=1)
+    def construct_grid(lengths, density):
         dx = 1 / density
-        grid_ticks = [jnp.arange(r[0], r[1] + dx, dx) for r in x_range]
+        grid_ticks = [jnp.arange(0, l + dx, dx) for l in lengths]
         grid_axes = jnp.meshgrid(*grid_ticks)
         uniform_grid = jnp.stack(grid_axes, axis=-1)
-        return uniform_grid
+        return uniform_grid, tuple(len(ticks) for ticks in grid_ticks)
+
+    def _encode_latent(
+            self,
+            x_context: Array,
+            y_context: Array,
+            context_mask: Array
+    ):
+        x_start = x_context.min(axis=1)[:, jnp.newaxis, :]
+        xy_context = jnp.concatenate([x_context - x_start, y_context], axis=-1)
+        z_latent = self._latent_encoder(xy_context)
+        return self._encode_latent_gaussian(z_latent, context_mask)
 
     def _encode_deterministic(
             self,
@@ -65,12 +87,14 @@ class CCNP(MaskedNP):
     def _decode(self, representation: Tuple[Array, Array], x_target: Array, y: Array):
         uniform_grid, h = representation
         f = self._decoder_cnn(h)
-        # why is uniform grid being used here? mistake?
         K_mean = self._mean_kernel(x_target, uniform_grid)
         K_sigma = self._sigma_kernel(x_target, uniform_grid)
         f0, f1 = jnp.split(f, 2, axis=-1)
+        #alpha = 0.01 + 0.9*K_mean @ nn.softplus(f0).reshape(f0.shape[0], -1, f0.shape[-1])
+        #beta = 0.01 + 0.9*K_sigma @ nn.softplus(f1).reshape(f1.shape[0], -1, f1.shape[-1])
         mu = K_mean @ f0.reshape(f0.shape[0], -1, f0.shape[-1])
         sigma = 0.01 + 0.9*K_sigma @ nn.softplus(f1).reshape(f1.shape[0], -1, f1.shape[-1])
         #family = self._family(jnp.concatenate((mu, sigma), axis=-1))
         #self._check_posterior_predictive_axis(family, x_target, y)
         return dist.Normal(loc=mu, scale=sigma)
+        #return dist.Beta(alpha, beta)
