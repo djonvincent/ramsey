@@ -21,8 +21,8 @@ __M4_HOURLY = dset(
 __M4_DAILY = dset(
     "daily",
     [
-        "f{URL__}/Train/Daily-train.csv",
-        "f{URL__}/Test/Daily-test.csv",
+        f"{URL__}/Train/Daily-train.csv",
+        f"{URL__}/Test/Daily-test.csv",
     ],
 )
 

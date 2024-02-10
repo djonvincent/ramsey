@@ -8,9 +8,7 @@ from jax import Array
 from jax import random as jr
 from tqdm import tqdm
 
-from ramsey._src.experimental.gaussian_process.kernel.stationary import matern_5_2
 from ramsey._src.neural_process.neural_process import NP, MaskedNP
-from ramsey._src.neural_process.convolutional_conditional_neural_process import CCNP
 
 __all__ = ["train_neural_process", "train_masked_np"]
 
@@ -117,16 +115,15 @@ def train_masked_np(
     neural_process: MaskedNP,  # pylint: disable=invalid-name
     data_func,
     batch_size: int,
-    shuffle = False,
+    shuffle=False,
     optimizer=optax.adam(3e-4),
-    n_iter=200,
-    n_epochs=256,
+    n_iter=20000,
     n_context_max: int = 50,
     n_context_min: int = 3,
     n_target_max: int = 50,
     n_target_min: int = 3,
     verbose=False,
-    split_fn = None
+    split_fn=None
 ):
 
     train_state_rng, rng_key = jr.split(rng_key)
@@ -198,17 +195,16 @@ def train_masked_np(
         _split_data = jax.jit(split_fn, static_argnums=[3, 4, 5, 6])
     _data_func = jax.jit(data_func, static_argnums=[1,2])
     objectives = []
-    for i in tqdm(range(n_epochs)):
-        for j in range(n_iter):
-            data_rng_key, range_rng_key, split_rng_key, sample_rng_key, rng_key = jr.split(rng_key, 5)
-            x, y = _data_func(data_rng_key, batch_size, n_context_max+n_target_max)
-            ranges = get_context_target_ranges(range_rng_key)
-            batch = _split_data(split_rng_key, x, y, **ranges)
-            state, obj = _step({"sample": sample_rng_key}, state, **batch)
-            objectives.append(obj)
-            if (i % 100 == 0 or i == n_iter - 1) and verbose:
-                elbo = -float(obj)
-                print(f"ELBO at itr {i}: {elbo:.2f}")
+    for i in tqdm(range(n_iter)):
+        data_rng_key, range_rng_key, split_rng_key, sample_rng_key, rng_key = jr.split(rng_key, 5)
+        x, y = _data_func(data_rng_key, batch_size, n_context_max+n_target_max)
+        ranges = get_context_target_ranges(range_rng_key)
+        batch = _split_data(split_rng_key, x, y, **ranges)
+        state, obj = _step({"sample": sample_rng_key}, state, **batch)
+        objectives.append(obj)
+        if (i % 100 == 0 or i == n_iter - 1) and verbose:
+            elbo = -float(obj)
+            print(f"ELBO at itr {i}: {elbo:.2f}")
 
     return state.params, np.array(objectives)
 

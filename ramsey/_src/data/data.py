@@ -1,6 +1,7 @@
 from collections import namedtuple
 
 import pandas as pd
+import numpy as np
 from jax import numpy as jnp
 from jax import random as jr
 from numpyro import distributions as dist
@@ -29,6 +30,14 @@ def m4_data(interval: str = "hourly", drop_na: bool = True):
         testing indexes for the input-output paris
     """
     train, test = M4Dataset().load(interval)
+
+    # The M4 dataset has different lengths in the training data, so we need to
+    # shift the train values right to put the NaNs at the start. This removes
+    # the unnecessary gap between train and test values
+    n_nans = np.isnan(train.values).sum(axis=1)
+    for n in np.unique(n_nans):
+        train.values[n_nans == n] = np.roll(train.values[n_nans == n], n, axis=1)
+
     df = pd.concat([train, test.reindex(train.index)], axis=1)
     if drop_na:
         df = df.dropna()

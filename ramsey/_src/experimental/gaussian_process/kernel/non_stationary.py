@@ -83,9 +83,9 @@ def linear(x1: Array, x2: Array, sigma_b, sigma_v, offset):
     def _linear(x1: Array, x2: Array, sigma_b, sigma_v, offset):
         x_e = x1 - offset
         y_e = x2 - offset
-        x_e = jnp.expand_dims(x_e, 1)
-        y_e = jnp.expand_dims(y_e, 0)
-        d = jnp.sum(x_e * y_e, axis=2)
+        x_e = jnp.expand_dims(x_e, -2)
+        y_e = jnp.expand_dims(y_e, -3)
+        d = jnp.sum(x_e * y_e, axis=-1)
         K = sigma_v**2 * d + sigma_b**2
         return K
 

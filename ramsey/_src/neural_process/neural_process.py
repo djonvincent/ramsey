@@ -336,7 +336,7 @@ class MaskedNP(nn.Module):
         representation = self._concat_and_tile(
             z_deterministic, z_latent, num_observations
         )
-        pred_fn = self._decode(representation, x_target, y_context)
+        pred_fn = self._decode(representation, x_target, y_context, target_mask)
 
         return pred_fn
 
@@ -383,7 +383,7 @@ class MaskedNP(nn.Module):
         representation = self._concat_and_tile(
             z_deterministic, z_latent, num_observations
         )
-        pred_fn = self._decode(representation, x_target, y_target)
+        pred_fn = self._decode(representation, x_target, y_context, target_mask)
         loglik = jnp.sum(pred_fn.log_prob(y_target) * target_mask[..., jnp.newaxis], axis=1)
         elbo = jnp.mean(loglik - kl)
 
@@ -439,7 +439,7 @@ class MaskedNP(nn.Module):
         sigma = 0.01 + 0.9 * jax.nn.sigmoid(sigma)
         return dist.Normal(loc=mean, scale=sigma)
 
-    def _decode(self, representation: Array, x_target: Array, y: Array):
+    def _decode(self, representation: Array, x_target: Array, y: Array, target_mask: Array):
         target = jnp.concatenate([representation, x_target], axis=-1)
         target = self._decoder(target)
         family = self._family(target)
