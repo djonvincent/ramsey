@@ -108,6 +108,7 @@ class M4Dataset:
         "daily",
         "weekly",
         "monthly",
+        "quarterly",
         "yearly",
     ]
     data_dir: str = os.path.abspath(

@@ -1,13 +1,13 @@
 from typing import Any
 
+from chex import assert_axis_dimension
 from flax import linen as nn
 from jax import Array
 from jax import numpy as jnp
-from chex import assert_axis_dimension
 
 from ramsey._src.family import Family, Gaussian
-from ramsey._src.neural_process.neural_process import MaskedNP
 from ramsey._src.neural_process.attentive_neural_process import ANP
+from ramsey._src.neural_process.neural_process import MaskedNP
 
 __all__ = ["DANP", "MaskedDANP"]
 
@@ -93,6 +93,7 @@ class DANP(ANP):
         )
         return z_deterministic
 
+
 class MaskedDANP(MaskedNP):
     """
     A doubly-attentive neural process.
@@ -164,13 +165,19 @@ class MaskedDANP(MaskedNP):
         assert_axis_dimension(representation, 1, num_observations)
         return representation
 
-    def _encode_latent(self, x_context: Array, y_context: Array, context_mask: Array):
+    def _encode_latent(
+        self, x_context: Array, y_context: Array, context_mask: Array
+    ):
         xy_context = jnp.concatenate([x_context, y_context], axis=-1)
-        self_attn_mask = context_mask[..., jnp.newaxis] @ context_mask[..., jnp.newaxis, :]
+        self_attn_mask = jnp.matmul(
+            context_mask[..., jnp.newaxis], context_mask[..., jnp.newaxis, :]
+        )
         z_latent = self._latent_encoder(xy_context)
-        z_latent = self._latent_self_attention(z_latent, z_latent, z_latent, self_attn_mask)
+        z_latent = self._latent_self_attention(
+            z_latent, z_latent, z_latent, self_attn_mask[:, jnp.newaxis, ...]
+        )
         z_latent = z_latent * context_mask[..., jnp.newaxis]
-        return self._encode_latent_gaussian(z_latent)
+        return self._encode_latent_gaussian(z_latent, context_mask)
 
     def _encode_deterministic(
         self,
@@ -178,16 +185,26 @@ class MaskedDANP(MaskedNP):
         y_context: Array,
         x_target: Array,
         context_mask: Array,
-        target_mask: Array
+        target_mask: Array,
     ):
         xy_context = jnp.concatenate([x_context, y_context], axis=-1)
-        self_attn_mask = context_mask[..., jnp.newaxis] @ context_mask[..., jnp.newaxis, :]
-        cross_attn_mask = target_mask[..., jnp.newaxis] @ context_mask[..., jnp.newaxis, :]
+        self_attn_mask = jnp.matmul(
+            context_mask[..., jnp.newaxis], context_mask[..., jnp.newaxis, :]
+        )
+        cross_attn_mask = jnp.matmul(
+            target_mask[..., jnp.newaxis], context_mask[..., jnp.newaxis, :]
+        )
         z_deterministic = self._deterministic_encoder(xy_context)
         z_deterministic = self._deterministic_self_attention(
-            z_deterministic, z_deterministic, z_deterministic, self_attn_mask
+            z_deterministic,
+            z_deterministic,
+            z_deterministic,
+            self_attn_mask[:, jnp.newaxis, ...],
         )
         z_deterministic = self._deterministic_cross_attention(
-            x_context, z_deterministic, x_target, cross_attn_mask
+            x_context,
+            z_deterministic,
+            x_target,
+            cross_attn_mask[:, jnp.newaxis, ...],
         )
         return z_deterministic

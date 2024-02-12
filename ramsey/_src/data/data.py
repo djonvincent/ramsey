@@ -1,14 +1,14 @@
 from collections import namedtuple
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 from jax import numpy as jnp
 from jax import random as jr
 from numpyro import distributions as dist
 
 from ramsey._src.data.dataset_m4 import M4Dataset
 from ramsey._src.experimental.gaussian_process.kernel.stationary import (
-    exponentiated_quadratic, matern_5_2, periodic
+    exponentiated_quadratic,
 )
 
 
@@ -34,9 +34,9 @@ def m4_data(interval: str = "hourly", drop_na: bool = True):
     # The M4 dataset has different lengths in the training data, so we need to
     # shift the train values right to put the NaNs at the start. This removes
     # the unnecessary gap between train and test values
-    n_nans = np.isnan(train.values).sum(axis=1)
-    for n in np.unique(n_nans):
-        train.values[n_nans == n] = np.roll(train.values[n_nans == n], n, axis=1)
+    nans = np.isnan(train.values).sum(axis=1)
+    for n in np.unique(nans):
+        train.values[nans == n] = np.roll(train.values[nans == n], n, axis=1)
 
     df = pd.concat([train, test.reindex(train.index)], axis=1)
     if drop_na:
@@ -109,7 +109,13 @@ def sample_from_sine_function(rng_key, batch_size=10, num_observations=100):
 
 # pylint: disable=too-many-locals,invalid-name
 def sample_from_gaussian_process(
-    rng_key, batch_size=10, num_observations=100, rho=None, sigma=None, xmin=-2, xmax=2
+    rng_key,
+    batch_size=10,
+    num_observations=100,
+    rho=None,
+    sigma=None,
+    xmin=-jnp.pi,
+    xmax=jnp.pi,
 ):
     r"""Sample from a Gaussian process.
 
@@ -136,6 +142,10 @@ def sample_from_gaussian_process(
         the lengthscale of the kernel function
     sigma: Optional[float]
         the standard deviation of the kernel function
+    xmin: float
+        the minimum value for sampled x values
+    xmax: float
+        the maximum value for sampled x values
 
     Returns
     -------

@@ -185,6 +185,7 @@ def periodic(x1: Array, x2: Array, period, sigma, rho):
 
     return _periodic(x1, x2, period, sigma, rho)
 
+
 # pylint: disable=invalid-name
 def matern_5_2(
     x1: Array,

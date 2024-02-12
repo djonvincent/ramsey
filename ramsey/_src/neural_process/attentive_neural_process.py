@@ -85,6 +85,7 @@ class ANP(NP):
         )
         return z_deterministic
 
+
 class MaskedANP(MaskedNP):
     """An attentive neural process.
 
@@ -150,11 +151,18 @@ class MaskedANP(MaskedNP):
         assert_axis_dimension(representation, 1, num_observations)
         return representation
 
-    def _encode_deterministic(self, x_context, y_context, x_target, context_mask, target_mask):
+    def _encode_deterministic(
+        self, x_context, y_context, x_target, context_mask, target_mask
+    ):
         xy_context = jnp.concatenate([x_context, y_context], axis=-1)
         z_deterministic = self._deterministic_encoder(xy_context)
-        cross_attn_mask = target_mask[..., jnp.newaxis] @ context_mask[..., jnp.newaxis, :]
+        cross_attn_mask = jnp.matmul(
+            target_mask[..., jnp.newaxis], context_mask[..., jnp.newaxis, :]
+        )
         z_deterministic = self._deterministic_cross_attention(
-            x_context, z_deterministic, x_target, cross_attn_mask
+            x_context,
+            z_deterministic,
+            x_target,
+            cross_attn_mask[:, jnp.newaxis, ...],
         )
         return z_deterministic

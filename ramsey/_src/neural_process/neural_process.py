@@ -73,7 +73,7 @@ class NP(nn.Module):
         x_context: Array,
         y_context: Array,
         x_target: Array,
-        **kwargs,
+        y_target: Optional[Array] = None,
     ):
         """Transform the inputs through the neural process.
 
@@ -86,11 +86,9 @@ class NP(nn.Module):
             (*batch_dims, spatial_dims..., response_dims)
         x_target: jax.Array
             Input data of dimension (*batch_dims, spatial_dims..., feature_dims)
-        **kwargs: kwargs
-            Keyword arguments can include:
-            - y_target: jax.Array. If an argument called 'y_target'
-            is provided, computes the loss (negative ELBO) together with a
-            predictive posterior distribution
+        y_target: jax.Array
+            If y_target is provided, computes the loss (negative ELBO) together
+            with a predictive posterior distribution
 
         Returns
         -------
@@ -102,9 +100,9 @@ class NP(nn.Module):
             distribution only.
         """
         assert_rank([x_context, y_context, x_target], 3)
-        if "y_target" in kwargs:
-            assert_rank(kwargs["y_target"], 3)
-            return self._negative_elbo(x_context, y_context, x_target, **kwargs)
+        if y_target is not None:
+            assert_rank(y_target, 3)
+            return self._negative_elbo(x_context, y_context, x_target, y_target)
 
         _, num_observations, _ = x_target.shape
 
@@ -194,7 +192,7 @@ class NP(nn.Module):
         z_latent = jnp.mean(z_latent, axis=1, keepdims=True)
         z_latent = self._latent_variable_encoder(z_latent)
         mean, sigma = jnp.split(z_latent, 2, axis=-1)
-        sigma = 0.1 + 0.9 * jax.nn.sigmoid(sigma)
+        sigma = 0.01 + jax.nn.sigmoid(sigma)
         return dist.Normal(loc=mean, scale=sigma)
 
     def _decode(self, representation: Array, x_target: Array, y: Array):
@@ -213,6 +211,7 @@ class NP(nn.Module):
         assert_axis_dimension(family.mean, 0, x_target.shape[0])
         assert_axis_dimension(family.mean, 1, x_target.shape[1])
         assert_axis_dimension(family.mean, 2, y.shape[2])
+
 
 class MaskedNP(nn.Module):
     """A neural process.
@@ -272,9 +271,9 @@ class MaskedNP(nn.Module):
         x_context: Array,
         y_context: Array,
         x_target: Array,
-        context_mask: Array = None,
-        target_mask: Array = None,
-        y_target: Array = None,
+        context_mask: Optional[Array] = None,
+        target_mask: Optional[Array] = None,
+        y_target: Optional[Array] = None,
         **kwargs,
     ):
         """Transform the inputs through the neural process.
@@ -292,11 +291,9 @@ class MaskedNP(nn.Module):
             Mask for context data of dimensions (*batch_dims, context_length)
         target_mask: jax.Array
             Mask for target data of dimensions (*batch_dims, target_length)
-        **kwargs: kwargs
-            Keyword arguments can include:
-            - y_target: jax.Array. If an argument called 'y_target'
-            is provided, computes the loss (negative ELBO) together with a
-            predictive posterior distribution
+        y_target: jax.Array
+            If y_target is provided, computes the loss (negative ELBO) together
+            with a predictive posterior distribution
 
         Returns
         -------
@@ -310,7 +307,14 @@ class MaskedNP(nn.Module):
         assert_rank([x_context, y_context, x_target], 3)
         if y_target is not None:
             assert_rank(y_target, 3)
-            return self._negative_elbo(x_context, y_context, x_target, y_target, context_mask, target_mask)
+            return self._negative_elbo(
+                x_context,
+                y_context,
+                x_target,
+                y_target,
+                context_mask,
+                target_mask,
+            )
 
         _, num_observations, _ = x_target.shape
 
@@ -326,7 +330,8 @@ class MaskedNP(nn.Module):
 
         if self.latent_encoder is not None:
             rng = self.make_rng("sample")
-            z_latent = self._encode_latent(x_context, y_context, context_mask).sample(rng)
+            latent = self._encode_latent(x_context, y_context, context_mask)
+            z_latent = latent.sample(rng)
         else:
             z_latent = None
 
@@ -348,7 +353,6 @@ class MaskedNP(nn.Module):
         y_target: Array,
         context_mask: Array,
         target_mask: Array,
-        **kwargs
     ):
         _, num_observations, _ = x_target.shape
 
@@ -365,12 +369,7 @@ class MaskedNP(nn.Module):
         if self.latent_encoder is not None:
             rng = self.make_rng("sample")
             prior = self._encode_latent(x_context, y_context, context_mask)
-            #posterior = self._encode_latent(x_target, y_target, target_mask)
-            posterior = self._encode_latent(
-                jnp.concatenate((x_target, x_context), axis=1),
-                jnp.concatenate((y_target, y_context), axis=1),
-                jnp.concatenate((target_mask, context_mask), axis=1),
-            )
+            posterior = self._encode_latent(x_target, y_target, target_mask)
             z_latent = posterior.sample(rng)
             kl = jnp.sum(kl_divergence(posterior, prior), axis=-1)
         else:
@@ -384,7 +383,9 @@ class MaskedNP(nn.Module):
             z_deterministic, z_latent, num_observations
         )
         pred_fn = self._decode(representation, x_target, y_context, target_mask)
-        loglik = jnp.sum(pred_fn.log_prob(y_target) * target_mask[..., jnp.newaxis], axis=1)
+        loglik = jnp.sum(
+            pred_fn.log_prob(y_target) * target_mask[..., jnp.newaxis], axis=1
+        )
         elbo = jnp.mean(loglik - kl)
 
         return pred_fn, -elbo
@@ -410,8 +411,8 @@ class MaskedNP(nn.Module):
         x_context: Array,
         y_context: Array,
         x_target: Array,  # pylint: disable=unused-argument
-        context_mask: Array,
-        target_mask: Array
+        context_mask: Array,  # pylint: disable=unused-argument
+        target_mask: Array,  # pylint: disable=unused-argument
     ):
         if self.deterministic_encoder is None:
             return None
@@ -421,10 +422,7 @@ class MaskedNP(nn.Module):
         return z_deterministic
 
     def _encode_latent(
-            self,
-            x_context: Array,
-            y_context: Array,
-            context_mask: Array
+        self, x_context: Array, y_context: Array, context_mask: Array
     ):
         xy_context = jnp.concatenate([x_context, y_context], axis=-1)
         z_latent = self._latent_encoder(xy_context)
@@ -432,14 +430,22 @@ class MaskedNP(nn.Module):
 
     # pylint: disable=duplicate-code
     def _encode_latent_gaussian(self, z_latent, context_mask):
-        z_latent = jnp.sum(z_latent * context_mask[..., jnp.newaxis], axis=1, keepdims=True)
-        z_latent = z_latent / jnp.sum(context_mask[..., jnp.newaxis], axis=1, keepdims=True)
+        weights = jnp.broadcast_to(
+            context_mask[..., jnp.newaxis], z_latent.shape
+        )
+        z_latent = jnp.average(z_latent, weights=weights, axis=1)
         z_latent = self._latent_variable_encoder(z_latent)
         mean, sigma = jnp.split(z_latent, 2, axis=-1)
-        sigma = 0.01 + 0.9 * jax.nn.sigmoid(sigma)
+        sigma = 0.01 + jax.nn.sigmoid(sigma)
         return dist.Normal(loc=mean, scale=sigma)
 
-    def _decode(self, representation: Array, x_target: Array, y: Array, target_mask: Array):
+    def _decode(
+        self,
+        representation: Array,
+        x_target: Array,
+        y: Array,
+        target_mask: Array,  # pylint: disable=unused-argument
+    ):
         target = jnp.concatenate([representation, x_target], axis=-1)
         target = self._decoder(target)
         family = self._family(target)

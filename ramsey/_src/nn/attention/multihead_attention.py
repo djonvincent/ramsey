@@ -46,11 +46,13 @@ class MultiHeadAttention(Attention):
         self._attention = _MultiHeadAttention(
             num_heads=self.num_heads,
             qkv_features=self.head_size * self.num_heads,
-            out_features=self.head_size
+            out_features=self.head_size,
         )
 
     @nn.compact
-    def __call__(self, key: Array, value: Array, query: Array, mask: Array = None):
+    def __call__(
+        self, key: Array, value: Array, query: Array, mask: Array = None
+    ):
         """Apply attention to the query.
 
         Arguments
@@ -141,7 +143,7 @@ class _MultiHeadAttention(nn.Module):
             query,
             key,
             value,
-            mask=jnp.expand_dims(mask, -3),
+            mask=mask,
             dropout_rng=dropout_rng,
             dropout_rate=self.dropout_rate,
             broadcast_dropout=self.broadcast_dropout,
