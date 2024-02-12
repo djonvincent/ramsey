@@ -124,6 +124,7 @@ def train_masked_np(
     n_target_min: int = 3,
     verbose=False,
     split_fn=None,
+    chunks=1
 ):
 
     train_state_rng, rng_key = jr.split(rng_key)
@@ -139,23 +140,20 @@ def train_masked_np(
         train_state_rng, neural_process, optimizer, **init_kwargs
     )
 
-    def get_context_target_ranges(rng_key):
-        ctx_rng_key, tgt_rng_key = jr.split(rng_key, 2)
-        chunks = 2
-        context_chunks = jnp.linspace(
+    def get_context_target_ranges(rng):
+        context_chunks = np.linspace(
             n_context_min, n_context_max, chunks + 1
         ).astype(int)
-        target_chunks = jnp.linspace(
+        target_chunks = np.linspace(
             n_target_min, n_target_max, chunks + 1
         ).astype(int)
-        context_chunk_idx = jr.randint(ctx_rng_key, (), 0, chunks)
-        target_chunk_idx = jr.randint(tgt_rng_key, (), 0, chunks)
+        context_chunk_idx, target_chunk_idx = rng.integers(0, chunks, 2)
 
         return {
-            "n_context_min": context_chunks[context_chunk_idx].item(),
-            "n_context_max": context_chunks[context_chunk_idx + 1].item(),
-            "n_target_min": target_chunks[target_chunk_idx].item(),
-            "n_target_max": target_chunks[target_chunk_idx + 1].item(),
+            "n_context_min": context_chunks[context_chunk_idx],
+            "n_context_max": context_chunks[context_chunk_idx + 1],
+            "n_target_min": target_chunks[target_chunk_idx],
+            "n_target_max": target_chunks[target_chunk_idx + 1],
         }
 
     def split_data(
@@ -212,25 +210,30 @@ def train_masked_np(
         }
 
     if split_fn is None:
-        _split_data = jax.jit(split_data, static_argnums=[3, 4, 5, 6])
+        _split_data = split_data
     else:
-        _split_data = jax.jit(split_fn, static_argnums=[3, 4, 5, 6])
-    _data_func = jax.jit(data_func, static_argnums=[1, 2])
+        _split_data = split_fn
     objectives = []
-    for i in tqdm(range(n_iter)):
-        [
-            data_rng_key,
-            range_rng_key,
-            split_rng_key,
-            sample_rng_key,
-            rng_key,
-        ] = jr.split(rng_key, 5)
-        x, y = _data_func(
-            data_rng_key, batch_size, n_context_max + n_target_max
+
+    def train_step(rng_key, state, n_context_min, n_context_max, n_target_min, n_target_max):
+        rngs = jr.split(rng_key, 3)
+        x, y = data_func(
+            rngs[0], batch_size, n_context_max + n_target_max
         )
-        ranges = get_context_target_ranges(range_rng_key)
-        batch = _split_data(split_rng_key, x, y, **ranges)
-        state, obj = _step({"sample": sample_rng_key}, state, **batch)
+        batch = _split_data(rngs[1], x, y, n_context_min, n_context_max, n_target_min, n_target_max)
+        state, obj = _step({"sample": rngs[2]}, state, **batch)
+        return state, obj
+
+    _train_step = jax.jit(train_step, static_argnums=[2,3,4,5])
+
+    rng_key, np_rng_key = jr.split(rng_key,2)
+    np_rng = np.random.default_rng(np.array(np_rng_key))
+    cpu = jax.devices('cpu')[0]
+    for i in tqdm(range(n_iter)):
+        with jax.default_device(cpu):
+            step_key, rng_key = jr.split(rng_key, 2)
+        ranges = get_context_target_ranges(np_rng)
+        state, obj = _train_step(step_key, state, **ranges)
         objectives.append(obj)
         if (i % 100 == 0 or i == n_iter - 1) and verbose:
             elbo = -float(obj)
