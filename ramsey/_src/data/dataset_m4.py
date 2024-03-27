@@ -1,7 +1,7 @@
 import os
 from collections import namedtuple
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, Optional
 from urllib.parse import urlparse
 from urllib.request import urlretrieve
 
@@ -58,6 +58,10 @@ __M4_YEARLY = dset(
     ],
 )
 
+
+_M4_INFO = dset("info", [f"{URL__}/M4-info.csv"])
+
+
 _M4_DATA_SETS = {
     "hourly": {
         "key": __M4_HOURLY,
@@ -111,17 +115,32 @@ class M4Dataset:
         "quarterly",
         "yearly",
     ]
+    __DOMAINS__ = [
+        "macro",
+        "micro",
+        "demographic",
+        "industry",
+        "finance",
+        "other",
+    ]
     data_dir: str = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), ".data")
+        os.path.join(os.path.dirname(__file__), ".data", "m4")
     )
 
-    def load(self, interval: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def load(
+            self,
+            interval: Optional[str] = None,
+            domain: Optional[str] = None
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Load a M4 data set.
 
         Parameters
         ----------
         interval: str
             either of "hourly", "daily", "weekly", "monthly", "yearly"
+        domain: str
+            either of "macro", "micro", "demographic", "industry", "finance",
+            "other"
 
         Returns
         -------
@@ -129,20 +148,54 @@ class M4Dataset:
             a tuple of data frames where the first is the training data and
             the last the testing data used during the M4 competition
         """
-        if interval not in self.__INTERVALS__:
+        if interval is None and domain is None:
+            raise ValueError(
+                "at least of one 'interval' or 'domain' must be specified"
+            )
+        if interval is not None and interval not in self.__INTERVALS__:
             raise ValueError(
                 f"'interval' should be one of: '{'/'.join(self.__INTERVALS__)}'"
             )
+        if domain is not None and domain not in self.__DOMAINS__:
+            raise ValueError(
+                f"'domain' should be one of: '{'/'.join(self.__DOMAINS__)}'"
+            )
+
         os.makedirs(self.data_dir, exist_ok=True)
-        dataset = _M4_DATA_SETS[interval]["key"]
-        train_csv_path = os.path.join(
-            self.data_dir, f"{interval.capitalize()}-train.csv"
-        )
-        test_csv_path = os.path.join(
-            self.data_dir, f"{interval.capitalize()}-test.csv"
-        )
-        train, test = self._load(dataset, train_csv_path, test_csv_path)
-        return train, test
+        if domain is not None:
+            self._download(_M4_INFO)
+            info_csv_path = os.path.join(self.data_dir, f"M4-info.csv")
+            m4_info = pd.read_csv(info_csv_path, sep=",", header=0, index_col=0)
+        if interval is None:
+            intervals = self.__INTERVALS__
+        else:
+            intervals = [interval]
+
+        all_train = []
+        all_test = []
+        for interval in intervals:
+            dataset = _M4_DATA_SETS[interval]["key"]
+            train_csv_path = os.path.join(
+                self.data_dir, f"{interval.capitalize()}-train.csv"
+            )
+            test_csv_path = os.path.join(
+                self.data_dir, f"{interval.capitalize()}-test.csv"
+            )
+            train, test = self._load(dataset, train_csv_path, test_csv_path)
+            if domain is not None:
+                domain_idx = pd.DataFrame(
+                    index = m4_info[
+                        m4_info["category"].str.lower() == domain
+                    ].index
+                )
+                train = train.join(domain_idx, how='inner')
+                test = test.join(domain_idx, how='inner')
+            all_train.append(train)
+            all_test.append(test)
+
+        all_train = pd.concat(all_train)
+        all_test = pd.concat(all_test)
+        return all_train, all_test
 
     def _download(self, dataset):
         for url in dataset.urls:

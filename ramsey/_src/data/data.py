@@ -1,4 +1,5 @@
 from collections import namedtuple
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -13,13 +14,20 @@ from ramsey._src.experimental.gaussian_process.kernel.stationary import (
 
 
 # pylint: disable=too-many-locals,invalid-name
-def m4_data(interval: str = "hourly", drop_na: bool = True):
+def m4_data(
+        interval: Optional[str] = None,
+        domain: Optional[str] = None,
+        drop_na: bool = False
+):
     """Load a data set from the M4 competition.
 
     Parameters
     ----------
-    interval: str
+    interval: Optional[str]
         either of "hourly", "daily", "weekly", "monthly", "yearly"
+    domain: Optional[str]
+        either of "macro", "micro", "demographic", "industry", "finance",
+        "other"
     drop_na: bool
         drop rows that contain NA values
 
@@ -29,7 +37,7 @@ def m4_data(interval: str = "hourly", drop_na: bool = True):
         returns a named tuple with outputs (y), inputs (x), and training and
         testing indexes for the input-output paris
     """
-    train, test = M4Dataset().load(interval)
+    train, test = M4Dataset().load(interval, domain)
 
     # The M4 dataset has different lengths in the training data, so we need to
     # shift the train values right to put the NaNs at the start. This removes
@@ -41,9 +49,9 @@ def m4_data(interval: str = "hourly", drop_na: bool = True):
     df = pd.concat([train, test.reindex(train.index)], axis=1)
     if drop_na:
         df = df.dropna()
-    y = df.values
+    y = jnp.array(df.values)
     y = y.reshape((*y.shape, 1))
-    x = jnp.arange(y.shape[1]) / train.shape[1]
+    x = jnp.arange(y.shape[1])
     x = jnp.tile(x, [y.shape[0], 1]).reshape((y.shape[0], y.shape[1], 1))
     train_idxs = jnp.arange(train.shape[1])
     test_idxs = jnp.arange(test.shape[1]) + train.shape[1]
