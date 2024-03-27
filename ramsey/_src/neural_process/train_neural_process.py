@@ -6,7 +6,6 @@ from flax.training.train_state import TrainState
 from jax import Array
 from jax import random as jr
 from tqdm import tqdm
-
 from ramsey._src.neural_process.neural_process import NP, MaskedNP
 
 __all__ = ["train_neural_process", "train_masked_np"]
@@ -18,11 +17,12 @@ def _step(rngs, state, **batch):
     rngs = {name: jr.fold_in(rng, current_step) for name, rng in rngs.items()}
 
     def obj_fn(params):
-        _, obj = state.apply_fn(variables=params, rngs=rngs, **batch)
-        return obj
+        (_, obj), updates = state.apply_fn(variables=params, rngs=rngs, **batch, train=True, mutable=['batch_stats'])
+        return obj, updates
 
-    obj, grads = jax.value_and_grad(obj_fn)(state.params)
+    (obj, updates), grads = jax.value_and_grad(obj_fn, has_aux=True)(state.params)
     new_state = state.apply_gradients(grads=grads)
+    new_state.params['batch_stats'] = updates['batch_stats']
     return new_state, obj
 
 
@@ -124,22 +124,11 @@ def train_masked_np(
     n_target_min: int = 3,
     verbose=False,
     split_fn=None,
-    chunks=1
+    chunks=1,
+    val_batches=None,
+    val_interval=100,
+    val_step=None
 ):
-
-    train_state_rng, rng_key = jr.split(rng_key)
-    init_kwargs = {
-        "x_context": jnp.empty((batch_size, n_context_max, 1)),
-        "y_context": jnp.empty((batch_size, n_context_max, 1)),
-        "x_target": jnp.empty((batch_size, n_target_max, 1)),
-        "context_mask": jnp.empty((batch_size, n_context_max), dtype=int),
-        "target_mask": jnp.empty((batch_size, n_target_max), dtype=int),
-    }
-
-    state = _create_train_state(
-        train_state_rng, neural_process, optimizer, **init_kwargs
-    )
-
     def get_context_target_ranges(rng):
         context_chunks = np.linspace(
             n_context_min, n_context_max, chunks + 1
@@ -215,30 +204,53 @@ def train_masked_np(
         _split_data = split_fn
     objectives = []
 
-    def train_step(rng_key, state, n_context_min, n_context_max, n_target_min, n_target_max):
-        rngs = jr.split(rng_key, 3)
-        x, y = data_func(
+    rng_key, *init_rngs, np_rng_key = jr.split(rng_key, 4)
+    np_rng = np.random.default_rng(np.array(np_rng_key))
+
+    @jax.jit
+    def batch_fn(rng_key):
+        ranges = get_context_target_ranges(np_rng)
+        rngs = jr.split(rng_key, 2)
+        data = data_func(
             rngs[0], batch_size, n_context_max + n_target_max
         )
-        batch = _split_data(rngs[1], x, y, n_context_min, n_context_max, n_target_min, n_target_max)
-        state, obj = _step({"sample": rngs[2]}, state, **batch)
-        return state, obj
+        batch = _split_data(
+            rngs[1], *data, **ranges
+        )
+        return batch
 
-    _train_step = jax.jit(train_step, static_argnums=[2,3,4,5])
+    if val_step is None:
+        def val_step(model, params, batch):
+            return model.apply(params, **batch, train=False)[1]
+    val_step = jax.jit(val_step, static_argnums=[0])
 
-    rng_key, np_rng_key = jr.split(rng_key,2)
-    np_rng = np.random.default_rng(np.array(np_rng_key))
+    batch = batch_fn(init_rngs[0])
+    state = _create_train_state(
+        init_rngs[1], neural_process, optimizer, **batch
+    )
+
     cpu = jax.devices('cpu')[0]
+    val_loss = []
     for i in tqdm(range(n_iter)):
         with jax.default_device(cpu):
-            step_key, rng_key = jr.split(rng_key, 2)
-        ranges = get_context_target_ranges(np_rng)
-        state, obj = _train_step(step_key, state, **ranges)
+            rng_key, *step_rngs = jr.split(rng_key, 4)
+        batch = batch_fn(step_rngs[0])
+        state, obj = _step(
+            {"sample": step_rngs[1], "dropout": step_rngs[2]}, state, **batch
+        )
         objectives.append(obj)
+        if (val_batches is not None and ((i+1) % val_interval == 0 or i == n_iter - 1)):
+            val_nll = jnp.nanmean(
+                jnp.concatenate(
+                    [val_step(neural_process, state.params, batch) for batch in val_batches]
+                )
+            )
+            val_loss.append(val_nll)
         if (i % 100 == 0 or i == n_iter - 1) and verbose:
             elbo = -float(obj)
             print(f"ELBO at itr {i}: {elbo:.2f}")
-
+    if val_batches is not None:
+        return state.params, np.array(objectives), np.array(val_loss)
     return state.params, np.array(objectives)
 
 
@@ -271,8 +283,13 @@ def _split_data(
     }
 
 
+
 def _create_train_state(rng, model, optimizer, **init_data):
-    init_key, sample_key = jr.split(rng)
-    params = model.init({"sample": sample_key, "params": init_key}, **init_data)
+    init_key, sample_key, dropout_key = jr.split(rng, 3)
+    params = model.init(
+        {"sample": sample_key, "params": init_key, "dropout": dropout_key},
+        **init_data,
+        train=True
+    )
     state = TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
     return state

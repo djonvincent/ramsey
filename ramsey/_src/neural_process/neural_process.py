@@ -314,6 +314,7 @@ class MaskedNP(nn.Module):
                 y_target,
                 context_mask,
                 target_mask,
+                **kwargs
             )
 
         _, num_observations, _ = x_target.shape
@@ -336,12 +337,14 @@ class MaskedNP(nn.Module):
             z_latent = None
 
         z_deterministic = self._encode_deterministic(
-            x_context, y_context, x_target, context_mask, target_mask
+            x_context, y_context, x_target, context_mask, target_mask, **kwargs
         )
         representation = self._concat_and_tile(
             z_deterministic, z_latent, num_observations
         )
-        pred_fn = self._decode(representation, x_target, y_context, target_mask)
+        pred_fn = self._decode(
+            representation, x_target, y_context, target_mask, **kwargs
+        )
 
         return pred_fn
 
@@ -353,6 +356,7 @@ class MaskedNP(nn.Module):
         y_target: Array,
         context_mask: Array,
         target_mask: Array,
+        **kwargs
     ):
         _, num_observations, _ = x_target.shape
 
@@ -377,12 +381,14 @@ class MaskedNP(nn.Module):
             kl = 0
 
         z_deterministic = self._encode_deterministic(
-            x_context, y_context, x_target, context_mask, target_mask
+            x_context, y_context, x_target, context_mask, target_mask, **kwargs
         )
         representation = self._concat_and_tile(
             z_deterministic, z_latent, num_observations
         )
-        pred_fn = self._decode(representation, x_target, y_context, target_mask)
+        pred_fn = self._decode(
+            representation, x_target, y_context, target_mask, **kwargs
+        )
         loglik = jnp.sum(
             pred_fn.log_prob(y_target) * target_mask[..., jnp.newaxis], axis=1
         )

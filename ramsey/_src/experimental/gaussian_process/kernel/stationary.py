@@ -78,7 +78,9 @@ class ExponentiatedQuadratic(Kernel, nn.Module):
 
     active_dims: Optional[list] = None
     rho_init: Optional[initializers.Initializer] = None
+    rho: Optional[float] = None
     sigma_init: Optional[initializers.Initializer] = None
+    sigma: Optional[float] = None
 
     def setup(self):
         """Construct a stationary covariance."""
@@ -96,14 +98,20 @@ class ExponentiatedQuadratic(Kernel, nn.Module):
         dtype = x1.dtype
 
         rho_init = self.rho_init
-        if rho_init is None:
-            rho_init = initializers.constant(jnp.log(1.0))
-        log_rho = self.param("log_rho", rho_init, [], dtype)
+        if self.rho is not None:
+            log_rho = 0
+        else:
+            if rho_init is None:
+                rho_init = initializers.constant(jnp.log(1.0))
+            log_rho = self.param("log_rho", rho_init, [], dtype)
 
         sigma_init = self.sigma_init
-        if sigma_init is None:
-            sigma_init = initializers.constant(jnp.log(1.0))
-        log_sigma = self.param("log_sigma", sigma_init, [], dtype)
+        if self.sigma is not None:
+            log_sigma = 0
+        else:
+            if sigma_init is None:
+                sigma_init = initializers.constant(jnp.log(1.0))
+            log_sigma = self.param("log_sigma", sigma_init, [], dtype)
 
         cov = exponentiated_quadratic(
             x1[..., self._active_dims],
